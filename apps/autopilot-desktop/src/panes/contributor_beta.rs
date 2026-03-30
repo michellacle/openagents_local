@@ -6,11 +6,9 @@ use crate::pane_renderer::{
     paint_primary_button, paint_secondary_button, paint_selectable_row_background,
     paint_source_badge, paint_state_summary,
 };
-use crate::pane_system::{
-    contributor_beta_action_button_bounds, contributor_beta_row_bounds,
-};
+use crate::pane_system::{contributor_beta_action_button_bounds, contributor_beta_row_bounds};
 
-const MAX_ROWS: usize = 5;
+const MAX_ROWS: usize = 4;
 
 pub fn paint(
     content_bounds: Bounds,
@@ -40,22 +38,22 @@ pub fn paint(
     if pane_state.identity_connected && pane_state.contract_accepted {
         paint_primary_button(
             contributor_beta_action_button_bounds(content_bounds, 2),
-            "Run Benchmark",
+            "Run Tailnet Pack",
             paint,
         );
         paint_primary_button(
             contributor_beta_action_button_bounds(content_bounds, 3),
-            "Submit Receipt",
+            "Submit Disagreement",
             paint,
         );
         paint_action_button(
             contributor_beta_action_button_bounds(content_bounds, 4),
-            "Cycle Worker",
+            "Cycle Role",
             paint,
         );
         paint_primary_button(
             contributor_beta_action_button_bounds(content_bounds, 5),
-            "Run Worker",
+            "Run Governed Role",
             paint,
         );
     } else {
@@ -63,10 +61,10 @@ pub fn paint(
             paint_disabled_button(
                 contributor_beta_action_button_bounds(content_bounds, index),
                 match index {
-                    2 => "Run Benchmark",
-                    3 => "Submit Receipt",
-                    4 => "Cycle Worker",
-                    _ => "Run Worker",
+                    2 => "Run Tailnet Pack",
+                    3 => "Submit Disagreement",
+                    4 => "Cycle Role",
+                    _ => "Run Governed Role",
                 },
                 paint,
             );
@@ -133,12 +131,41 @@ pub fn paint(
         "Admitted family",
         &pane_state.admitted_family,
     );
+    y = paint_multiline_phrase(
+        paint,
+        content_bounds.origin.x + 12.0,
+        y,
+        "Tailnet pilot",
+        &format!(
+            "{}{}",
+            pane_state.tailnet_pilot_label,
+            pane_state
+                .tailnet_current_tailnet
+                .as_deref()
+                .map(|tailnet| format!(" ({tailnet})"))
+                .unwrap_or_default()
+        ),
+    );
+    y = paint_multiline_phrase(
+        paint,
+        content_bounds.origin.x + 12.0,
+        y,
+        "Nodes",
+        &tailnet_nodes_summary(pane_state),
+    );
     y = paint_label_line(
         paint,
         content_bounds.origin.x + 12.0,
         y,
         "Worker role",
         pane_state.worker_role.label(),
+    );
+    y = paint_label_line(
+        paint,
+        content_bounds.origin.x + 12.0,
+        y,
+        "States",
+        &pane_state.submission_state_summary,
     );
     y = paint_label_line(
         paint,
@@ -164,8 +191,25 @@ pub fn paint(
         paint,
         content_bounds.origin.x + 12.0,
         y,
-        "Pending credit sats",
-        &pane_state.pending_credit_sats.to_string(),
+        "Review queue",
+        &format!(
+            "{} ({}) :: owner {}",
+            pane_state.review_queue_depth,
+            pane_state.review_sla_label,
+            pane_state.review_owner_label
+        ),
+    );
+    y = paint_label_line(
+        paint,
+        content_bounds.origin.x + 12.0,
+        y,
+        "Confirmed / provisional / hold",
+        &format!(
+            "{} / {} / {} sats",
+            pane_state.confirmed_credit_sats,
+            pane_state.pending_credit_sats,
+            pane_state.review_hold_credit_sats
+        ),
     );
     y = paint_multiline_phrase(
         paint,
@@ -177,17 +221,57 @@ pub fn paint(
             .as_deref()
             .unwrap_or("pending identity"),
     );
-    let _ = paint_label_line(
+    y = paint_label_line(
         paint,
         content_bounds.origin.x + 12.0,
         y,
         "Payment linkage",
         &pane_state.payment_link_state,
     );
+    y = paint_multiline_phrase(
+        paint,
+        content_bounds.origin.x + 12.0,
+        y,
+        "Credit rules",
+        &pane_state.provisional_credit_rulebook,
+    );
+    y = paint_multiline_phrase(
+        paint,
+        content_bounds.origin.x + 12.0,
+        y,
+        "Credit policy",
+        &pane_state.credit_policy_summary,
+    );
+    y = paint_multiline_phrase(
+        paint,
+        content_bounds.origin.x + 12.0,
+        y,
+        "Pilot digests",
+        &format!(
+            "run {} :: xtrain {} :: report {}",
+            compact_digest(&pane_state.tailnet_last_governed_run_digest),
+            compact_digest(&pane_state.tailnet_last_xtrain_receipt_digest),
+            compact_digest(&pane_state.tailnet_last_operational_report_digest)
+        ),
+    );
+    y = paint_multiline_phrase(
+        paint,
+        content_bounds.origin.x + 12.0,
+        y,
+        "Latest runtime",
+        &latest_runtime_summary(pane_state),
+    );
+    let _ = paint_multiline_phrase(
+        paint,
+        content_bounds.origin.x + 12.0,
+        y,
+        "Known operators",
+        &known_operator_summary(pane_state),
+    );
 
     let list_title_y = content_bounds.max_y() - 176.0;
     paint.scene.draw_text(paint.text.layout_mono(
-        "RECENT BETA SUBMISSIONS",
+        "RECENT TAILNET BETA SUBMISSIONS",
         Point::new(content_bounds.origin.x + 12.0, list_title_y),
         10.0,
         theme::text::MUTED,
@@ -211,15 +295,110 @@ pub fn paint(
         let detail = row
             .review_reason
             .as_deref()
-            .map(|reason| format!("{reason} :: {}", compact_digest(&row.digest)))
-            .unwrap_or_else(|| compact_digest(&row.digest));
+            .map(|reason| {
+                format!(
+                    "{} :: {} :: {}",
+                    review_reason_label(reason),
+                    lineage_summary(row),
+                    compact_digest(&row.digest)
+                )
+            })
+            .unwrap_or_else(|| {
+                format!(
+                    "{} :: {}",
+                    lineage_summary(row),
+                    compact_digest(&row.digest)
+                )
+            });
+        let lineage = row
+            .source_receipt_id
+            .as_deref()
+            .map(|receipt_id| format!("{detail} :: {receipt_id}"))
+            .unwrap_or(detail);
         paint.scene.draw_text(paint.text.layout_mono(
-            &detail,
+            &lineage,
             Point::new(row_bounds.origin.x + 10.0, row_bounds.origin.y + 37.0),
             9.0,
             theme::text::MUTED,
         ));
     }
+}
+
+fn tailnet_nodes_summary(pane_state: &ContributorBetaPaneState) -> String {
+    if pane_state.tailnet_nodes.is_empty() {
+        return "tailnet roster unavailable".to_string();
+    }
+    pane_state
+        .tailnet_nodes
+        .iter()
+        .map(|node| {
+            let ip = node.tailnet_ip.as_deref().unwrap_or("ip-pending");
+            format!("{} {} {} {}", node.role, node.device_name, node.status, ip)
+        })
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+fn latest_runtime_summary(pane_state: &ContributorBetaPaneState) -> String {
+    match pane_state.latest_runtime_receipt_id.as_deref() {
+        Some(receipt_id) => format!(
+            "{} :: {} :: {} :: review path replay_candidate_pending_review",
+            receipt_id,
+            pane_state
+                .latest_runtime_authority_path
+                .as_deref()
+                .unwrap_or("authority-pending"),
+            pane_state
+                .latest_runtime_confidence_band
+                .as_deref()
+                .unwrap_or("confidence-pending")
+        ),
+        None => "no runtime disagreement captured yet".to_string(),
+    }
+}
+
+fn review_reason_label(reason: &str) -> &'static str {
+    match reason {
+        "contract_mismatch" => "contract mismatch",
+        "digest_mismatch" => "digest mismatch",
+        "schema_violation" => "schema violation",
+        "low_signal_duplicate" => "low-signal duplicate",
+        "confidence_anomaly" => "confidence anomaly",
+        "disagreement_retained_for_replay_review" => "replay-review disagreement",
+        "no_accepted_benchmark_lineage" => "no accepted benchmark lineage",
+        _ => "manual review",
+    }
+}
+
+fn lineage_summary(row: &crate::app_state::ContributorBetaSubmissionRow) -> String {
+    format!(
+        "{} -> {} -> {} -> {} -> {}",
+        row.staging_state,
+        row.quarantine_state,
+        row.replay_status,
+        row.training_impact,
+        row.credit_disposition.label()
+    )
+}
+
+fn known_operator_summary(pane_state: &ContributorBetaPaneState) -> String {
+    if pane_state.known_operators.is_empty() {
+        return "no known external operators admitted yet".to_string();
+    }
+    pane_state
+        .known_operators
+        .iter()
+        .map(|operator| {
+            format!(
+                "{} {} {} {}",
+                operator.display_name,
+                operator.contract_status,
+                operator.readiness_status,
+                operator.credit_posture
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" | ")
 }
 
 fn compact_digest(digest: &str) -> String {
