@@ -357,6 +357,24 @@ impl TextInput {
         }
     }
 
+    fn normalized_shortcut_character(text: &str) -> Option<char> {
+        let mut chars = text.chars();
+        let ch = chars.next()?;
+        if chars.next().is_some() {
+            return None;
+        }
+
+        if ch.is_ascii_control() {
+            let code = ch as u32;
+            if (1..=26).contains(&code) {
+                let offset = u8::try_from(code - 1).ok()?;
+                return Some(char::from(b'a' + offset));
+            }
+        }
+
+        Some(ch.to_ascii_lowercase())
+    }
+
     fn move_cursor_left(&mut self) {
         if self.cursor_pos > 0 {
             self.cursor_pos -= 1;
@@ -659,11 +677,11 @@ impl Component for TextInput {
                 match key {
                     Key::Character(c) => {
                         if modifiers.ctrl || modifiers.meta {
-                            match c.as_str() {
-                                "a" | "A" => {
+                            match Self::normalized_shortcut_character(c.as_str()) {
+                                Some('a') => {
                                     self.select_all();
                                 }
-                                "c" | "C" => {
+                                Some('c') => {
                                     // Copy: selection or entire value
                                     if let Some((start, end)) = self.get_selection() {
                                         cx.write_clipboard(&self.value[start..end]);
@@ -671,14 +689,14 @@ impl Component for TextInput {
                                         cx.write_clipboard(&self.value);
                                     }
                                 }
-                                "x" | "X" => {
+                                Some('x') => {
                                     // Cut: copy selection then delete it
                                     if let Some((start, end)) = self.get_selection() {
                                         cx.write_clipboard(&self.value[start..end]);
                                         self.delete_selection();
                                     }
                                 }
-                                "v" | "V" => {
+                                Some('v') => {
                                     // Paste: delete selection first, then insert
                                     if let Some(text) = cx.read_clipboard() {
                                         self.delete_selection();
@@ -778,6 +796,9 @@ impl Component for TextInput {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Modifiers;
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     #[test]
     fn test_text_input_new() {
@@ -901,5 +922,67 @@ mod tests {
         let (start, end) = input.visible_line_window(bounds, line_count, true);
         let cursor_line = input.cursor_line();
         assert!(cursor_line >= start && cursor_line < end);
+    }
+
+    #[test]
+    fn test_ctrl_a_control_character_selects_all() {
+        let mut input = TextInput::new().value("hello");
+        input.focus();
+        let mut cx = EventContext::new();
+
+        let handled = input
+            .event(
+                &InputEvent::KeyDown {
+                    key: Key::Character("\u{1}".to_string()),
+                    modifiers: Modifiers {
+                        ctrl: true,
+                        ..Modifiers::default()
+                    },
+                },
+                Bounds::new(0.0, 0.0, 200.0, 32.0),
+                &mut cx,
+            )
+            .is_handled();
+
+        assert!(handled);
+        assert_eq!(input.get_selection(), Some((0, "hello".len())));
+    }
+
+    #[test]
+    fn test_ctrl_v_control_character_pastes_from_clipboard() {
+        let mut input = TextInput::new().value("hello");
+        input.focus();
+
+        let clipboard_writes = Rc::new(RefCell::new(String::new()));
+        let clipboard_reads = Rc::new(RefCell::new(" world".to_string()));
+        let mut cx = EventContext::new();
+        {
+            let clipboard_reads = Rc::clone(&clipboard_reads);
+            let clipboard_writes = Rc::clone(&clipboard_writes);
+            cx.set_clipboard(
+                move || Some(clipboard_reads.borrow().clone()),
+                move |text| {
+                    *clipboard_writes.borrow_mut() = text.to_string();
+                },
+            );
+        }
+
+        let handled = input
+            .event(
+                &InputEvent::KeyDown {
+                    key: Key::Character("\u{16}".to_string()),
+                    modifiers: Modifiers {
+                        ctrl: true,
+                        ..Modifiers::default()
+                    },
+                },
+                Bounds::new(0.0, 0.0, 200.0, 32.0),
+                &mut cx,
+            )
+            .is_handled();
+
+        assert!(handled);
+        assert_eq!(input.get_value(), "hello world");
+        assert!(clipboard_writes.borrow().is_empty());
     }
 }

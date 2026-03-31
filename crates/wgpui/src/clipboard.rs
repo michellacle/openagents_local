@@ -24,15 +24,24 @@ pub fn copy_to_clipboard(_contents: &str) -> Result<(), String> {
 
     #[cfg(target_os = "linux")]
     {
-        // Try Wayland first, then X11 tools
-        if try_command("wl-copy", &[], _contents).is_ok() {
-            Ok(())
+        if linux_prefers_wayland_clipboard() {
+            if try_command("wl-copy", &[], _contents).is_ok() {
+                Ok(())
+            } else if try_command("xclip", &["-selection", "clipboard"], _contents).is_ok() {
+                Ok(())
+            } else if try_command("xsel", &["--clipboard", "--input"], _contents).is_ok() {
+                Ok(())
+            } else {
+                Err("No clipboard tool available. Install wl-copy, xclip, or xsel.".into())
+            }
         } else if try_command("xclip", &["-selection", "clipboard"], _contents).is_ok() {
             Ok(())
         } else if try_command("xsel", &["--clipboard", "--input"], _contents).is_ok() {
             Ok(())
+        } else if try_command("wl-copy", &[], _contents).is_ok() {
+            Ok(())
         } else {
-            Err("No clipboard tool available. Install wl-copy, xclip, or xsel.".into())
+            Err("No clipboard tool available. Install xclip, xsel, or wl-copy.".into())
         }
     }
 
@@ -88,6 +97,13 @@ fn copy_with_command(cmd: &str, args: &[&str], contents: &str) -> Result<(), Str
 #[cfg(target_os = "linux")]
 fn try_command(cmd: &str, args: &[&str], contents: &str) -> Result<(), ()> {
     copy_with_command(cmd, args, contents).map_err(|_| ())
+}
+
+#[cfg(target_os = "linux")]
+fn linux_prefers_wayland_clipboard() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_some()
+        || std::env::var("XDG_SESSION_TYPE")
+            .is_ok_and(|value| value.eq_ignore_ascii_case("wayland"))
 }
 
 #[cfg(test)]

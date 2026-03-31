@@ -472,9 +472,17 @@ fn read_system_clipboard() -> Option<String> {
 
     #[cfg(target_os = "linux")]
     {
-        read_clipboard_with_command("wl-paste", &["-n"])
-            .or_else(|| read_clipboard_with_command("xclip", &["-selection", "clipboard", "-o"]))
-            .or_else(|| read_clipboard_with_command("xsel", &["--clipboard", "--output"]))
+        if linux_prefers_wayland_clipboard() {
+            read_clipboard_with_command("wl-paste", &["-n"])
+                .or_else(|| {
+                    read_clipboard_with_command("xclip", &["-selection", "clipboard", "-o"])
+                })
+                .or_else(|| read_clipboard_with_command("xsel", &["--clipboard", "--output"]))
+        } else {
+            read_clipboard_with_command("xclip", &["-selection", "clipboard", "-o"])
+                .or_else(|| read_clipboard_with_command("xsel", &["--clipboard", "--output"]))
+                .or_else(|| read_clipboard_with_command("wl-paste", &["-n"]))
+        }
     }
 
     #[cfg(target_os = "windows")]
@@ -486,6 +494,13 @@ fn read_system_clipboard() -> Option<String> {
     {
         None
     }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_prefers_wayland_clipboard() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_some()
+        || std::env::var("XDG_SESSION_TYPE")
+            .is_ok_and(|value| value.eq_ignore_ascii_case("wayland"))
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
